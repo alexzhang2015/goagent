@@ -64,7 +64,7 @@ class Common(object):
         self.GAE_DEBUG     = self.config.get('gae', 'debug')
         self.GAE_PATH      = self.config.get('gae', 'path')
         self.GAE_PROXY     = dict(re.match(r'^(\w+)://(\S+)$', proxy.strip()).group(1, 2) for proxy in self.config.get('gae', 'proxy').split('|')) if self.config.has_option('gae', 'proxy') else {}
-        self.GAE_BINDHOSTS = dict((host, random_choice(self.GAE_APPIDS)) for host in self.config.get('gae', 'bindhosts').split('|')) if self.config.has_option('gae', 'bindhosts') else {}
+        self.GAE_BINDHOSTS = dict((host, self.GAE_APPIDS[0]) for host in self.config.get('gae', 'bindhosts').split('|')) if self.config.has_option('gae', 'bindhosts') else {}
         self.GAE_CERTS     = self.config.get('gae', 'certs').split('|')
 
         self.HTTP_HOSTSLIST  = [x.split('|') for x in self.config.get('http', 'hosts').split('||')]
@@ -99,7 +99,7 @@ class Common(object):
         info += 'Local Proxy    : %s\n' % self.GAE_PROXY if self.GAE_PROXY else ''
         info += 'GAE Mode       : %s\n' % self.GAE_PREFER
         info += 'GAE APPID      : %s\n' % '|'.join(self.GAE_APPIDS)
-        info += 'GAE BindHost   : %s\n' % self.GAE_BINDHOSTS if self.GAE_BINDHOSTS else ''
+        info += 'GAE BindHost   : %s\n' % '|'.join('%s=%s' % (k, v) for k, v in self.GAE_BINDHOSTS.items()) if self.GAE_BINDHOSTS else ''
         info += '--------------------------------------------\n'
         return info
 
