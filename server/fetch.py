@@ -29,7 +29,7 @@ class MainHandler(webapp.RequestHandler):
     Deadline = (15, 30)
 
     def sendResponse(self, status_code, headers, content='', method='', url=''):
-        self.response.headers['Content-Type'] = 'application/octet-stream'
+        self.response.headers['Content-Type'] = 'image/gif'  # fake header
         contentType = headers.get('content-type', '').lower()
 
         headers = encode_data(headers)
