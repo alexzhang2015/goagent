@@ -134,9 +134,9 @@ class MultiplexConnection(object):
                     hostslist[:i], hostslist[i:] = hostslist[i:], hostslist[:i]
                 break
             else:
-                logging.warning('MultiplexConnection Cannot Connect to hosts %r', hosts)
+                logging.warning('MultiplexConnection Cannot hosts')
         else:
-            raise RuntimeError(r'MultiplexConnection Cannot Connect to hostslist %s:%s', hostslist, port)
+            raise RuntimeError(r'MultiplexConnection Cannot Connect to hostslist %s:%s' % (hostslist, port))
     def close(self):
         for soc in self._sockets:
             try:
