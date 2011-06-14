@@ -73,10 +73,10 @@ class Common(object):
         self.HTTPS_HOSTSLIST = [x.split('|') for x in self.config.get('https', 'hosts').split('||')]
         self.HTTPS_TIMEOUT   = self.config.getint('https', 'timeout')
         self.HTTPS_SAMPLE    = self.config.getint('https', 'sample')
-        self.XMPP_SERVER     = self.config.get('xmpp', 'server')
-        self.XMPP_PORT       = self.config.getint('xmpp', 'port')
-        self.XMPP_USERNAME   = self.config.get('xmpp', 'username')
-        self.XMPP_PASSWORD   = self.config.get('xmpp', 'password')
+        #self.XMPP_SERVER     = self.config.get('xmpp', 'server')
+        #self.XMPP_PORT       = self.config.getint('xmpp', 'port')
+        #self.XMPP_USERNAME   = self.config.get('xmpp', 'username')
+        #self.XMPP_PASSWORD   = self.config.get('xmpp', 'password')
         self.HOSTS           = self.config.items('hosts')
         logging.basicConfig(level=getattr(logging, self.GAE_DEBUG), format='%(levelname)s - - %(asctime)s %(message)s', datefmt='[%d/%b/%Y %H:%M:%S]')
 
@@ -329,6 +329,118 @@ class RootCA(object):
             for host in common.GAE_CERTS:
                 RootCA.getCertificate(host)
 
+
+class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
+
+    def address_string(self):
+        return '%s:%s' % self.client_address[:2]
+
+    def send_response(self, code, message=None):
+        self.log_request(code)
+        if message is None:
+            if code in self.responses:
+                message = self.responses[code][0]
+            else:
+                message = 'GoAgent Notify'
+        if self.request_version != 'HTTP/0.9':
+            self.wfile.write('%s %d %s\r\n' % (self.protocol_version, code, message))
+
+    def end_error(self, code, message=None, data=None):
+        if not data:
+            self.send_error(code, message)
+        else:
+            self.send_response(code, message)
+            self.wfile.write(data)
+        self.connection.close()
+
+    def finish(self):
+        try:
+            self.wfile.close()
+            self.rfile.close()
+        except socket.error, (err, _):
+            # Connection closed by browser
+            if err == 10053 or err == errno.EPIPE:
+                self.log_message('socket.error: [%s] "Software caused connection abort"', err)
+            else:
+                raise
+
+    def do_CONNECT(self):
+        try:
+            logging.debug('SimpleProxyHandler.do_CONNECT to %s' % self.path)
+            host, _, port = self.path.rpartition(':')
+            soc = socket.create_connection((host, port))
+            self.log_request(200)
+            self.wfile.write('%s 200 Connection established\r\n' % self.protocol_version)
+            self.wfile.write('Proxy-agent: %s\r\n\r\n' % self.version_string())
+            self._read_write(self.connection, soc)
+        except Exception, ex:
+            logging.exception('SimpleProxyHandler.do_CONNECT Error, %s', ex)
+            self.send_error(502, 'SimpleProxyHandler.do_CONNECT Error (%s)' % ex)
+        finally:
+            for conn in [self.connection, soc]:
+                try:
+                    conn.close()
+                except:
+                    pass
+
+    def resolve_netloc(self, netloc, defaultport=80):
+        if netloc.find(':') > netloc.find(']'):
+            host, _, port = netloc.rpartition(':')
+            return host, int(port)
+        else:
+            return netloc, defaultport
+
+    def do_METHOD(self):
+        try:
+            scheme, netloc, path, params, query, fragment = urlparse.urlparse(self.path, 'http')
+            host, port = self.resolve_netloc(netloc)
+            soc = socket.create_connection((host, port))
+            data = '%s %s %s\r\n'  % (self.command, urlparse.urlunparse(('', '', path, params, query, '')), self.request_version)
+            data += ''.join('%s: %s\r\n' % (k, self.headers[k]) for k in self.headers if not k.lower().startswith('proxy-'))
+            data += 'Connection: close\r\n'
+            data += '\r\n'
+            if self.command == 'POST':
+                data += self.rfile.read()
+            soc.send(data)
+            self._read_write(self.connection, soc)
+        except Exception, ex:
+            logging.exception('SimpleProxyHandler.do_GET Error, %s', ex)
+            self.send_error(502, 'SimpleProxyHandler.do_GET Error (%s)' % ex)
+        finally:
+            for conn in [self.connection, soc]:
+                try:
+                    conn.close()
+                except:
+                    pass
+
+    def _read_write(self, local, remote):
+        DIRECT_KEEPLIVE = 60
+        DIRECT_TICK = 2
+        count = DIRECT_KEEPLIVE // DIRECT_TICK
+        while 1:
+            count -= 1
+            (ins, _, errors) = select.select([local, remote], [], [local, remote], DIRECT_TICK)
+            if errors:
+                break
+            if ins:
+                for sock in ins:
+                    data = sock.recv(8192)
+                    if data:
+                        if sock is local:
+                            remote.send(data)
+                            # if packets lost in 20 secs, maybe ssl connection was dropped by GFW
+                            count = 10
+                        else:
+                            local.send(data)
+                            count = DIRECT_KEEPLIVE // DIRECT_TICK
+            if count == 0:
+                break
+
+    do_GET = do_METHOD
+    do_POST = do_METHOD
+    do_PUT = do_METHOD
+    do_DELETE = do_METHOD
+
 def gae_encode_data(dic):
     from binascii import b2a_hex
     return '&'.join('%s=%s' % (k, b2a_hex(str(v))) for k, v in dic.iteritems())
@@ -337,7 +449,7 @@ def gae_decode_data(qs):
     from binascii import a2b_hex
     return dict((k, a2b_hex(v)) for k, v in (x.split('=') for x in qs.split('&')))
 
-class GaeProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
+class GaeProxyHandler(SimpleProxyHandler):
     partSize = 1024000
     fetchTimeout = 5
     FR_Headers = ('', 'host', 'vary', 'via', 'x-forwarded-for', 'proxy-authorization', 'proxy-connection', 'upgrade', 'keep-alive')
@@ -489,92 +601,18 @@ class GaeProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         self.connection.close()
         return True
 
-    def do_METHOD(self):
-        if self.path.startswith('/'):
-            host = self.headers['host']
-            if host.endswith(':80'):
-                host = host[:-3]
-            self.path = 'http://%s%s' % (host , self.path)
-
-        payload_len = int(self.headers.get('content-length', 0))
-        if payload_len > 0:
-            payload = self.rfile.read(payload_len)
-        else:
-            payload = ''
-
-        for k in self.__class__.FR_Headers:
-            try:
-                del self.headers[k]
-            except KeyError:
-                pass
-
-        retval, data = self._fetch(self.path, self.command, self.headers, payload)
-        try:
-            if retval == -1:
-                return self.end_error(502, str(data))
-            if data['code']==206 and self.command=='GET':
-                m = re.search(r'bytes\s+(\d+)-(\d+)/(\d+)', data['headers'].get('content-range',''))
-                if m and self._RangeFetch(m, data):
-                    return
-            self.send_response(data['code'])
-            for k,v in data['headers'].iteritems():
-                self.send_header(k.title(), v)
-            self.end_headers()
-            self.wfile.write(data['content'])
-        except socket.error, (err, _):
-            # Connection closed before proxy return
-            if err == errno.EPIPE or err == 10053:
-                return
-        self.connection.close()
-
-    do_GET = do_METHOD
-    do_POST = do_METHOD
-    do_PUT = do_METHOD
-    do_DELETE = do_METHOD
-
-class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
-
-    def do_GET(self):
-        (scm, netloc, path, params, query, fragment) = urlparse.urlparse(self.path, 'http')
-        if scm != 'http' or fragment or not netloc:
-            self.send_error(400, "bad url %s" % self.path)
-            return
-        try:
-            if netloc.find(':') > netloc.find(']'):
-                host, _, port = netloc.rpartition(':')
-                port = int(port)
-            else:
-                host = netloc
-                port = 80
-            sock = socket_create_connection((host, port))
-            data = '%s %s %s\r\n'  % (self.command, urlparse.urlunparse(('', '', path, params, query, '')), self.request_version)
-            data += ''.join('%s: %s\r\n' % (k, self.headers[k]) for k in self.headers if not k.lower().startswith('proxy-'))
-            data += 'Connection: close\r\n'
-            data += '\r\n'
-            sock.send(data)
-            self._read_write(self.connection, sock)
-        except:
-            logging.exception('SimpleProxyHandler.do_GET Error')
-            self.send_error(502, 'SimpleProxyHandler.do_GET Error')
-        finally:
-            for conn in [self.connection, sock]:
-                try:
-                    conn.close()
-                except:
-                    pass
-
     def do_CONNECT(self):
         host, _, port = self.path.rpartition(':')
         hostslist = common.resolve_host(host)
         if hostslist is not None:
             hostslist = hostslist or [[x[-1][0] for x in socket.getaddrinfo(host, 80)]]
-            return self._connect_direct(host, port, hostslist, timeout=common.HTTPS_TIMEOUT, sample=common.HTTPS_SAMPLE)
+            return self.do_CONNECT_Direct(host, port, hostslist, timeout=common.HTTPS_TIMEOUT, sample=common.HTTPS_SAMPLE)
         else:
-            return self._connect_forward()
+            return self.do_CONNECT_Forward()
 
-    def _connect_direct(self, host, port, hostslist, timeout, sample):
+    def do_CONNECT_Direct(self, host, port, hostslist, timeout, sample):
         try:
-            logging.debug('ConnectProxyHandler MultiplexConnection to %s with %d hostslist' % (self.path, len(hostslist)))
+            logging.debug('GaeProxyHandler MultiplexConnection to %s with %d hostslist' % (self.path, len(hostslist)))
             conn = MultiplexConnection(hostslist, int(port), timeout, sample)
             if conn.socket is None:
                 return self.send_error(502, 'Cannot Connect to %s:%s' % (hostslist, port))
@@ -583,8 +621,8 @@ class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             self.wfile.write('Proxy-agent: %s\r\n\r\n' % self.version_string())
             self._read_write(self.connection, conn.socket)
         except:
-            logging.exception('Connect._connect_direct Error')
-            self.send_error(502, 'Connect._connect_direct Error')
+            logging.exception('GaeProxyHandler.do_CONNECT_Direct Error')
+            self.send_error(502, 'GaeProxyHandler.do_CONNECT_Direct Error')
         finally:
             for conn in [self.connection, conn.socket, conn]:
                 try:
@@ -592,30 +630,7 @@ class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                 except:
                     pass
 
-    def _read_write(self, local, remote):
-        DIRECT_KEEPLIVE = 60
-        DIRECT_TICK = 2
-        count = DIRECT_KEEPLIVE // DIRECT_TICK
-        while 1:
-            count -= 1
-            (ins, _, errors) = select.select([local, remote], [], [local, remote], DIRECT_TICK)
-            if errors:
-                break
-            if ins:
-                for sock in ins:
-                    data = sock.recv(8192)
-                    if data:
-                        if sock is local:
-                            remote.send(data)
-                            # if packets lost in 10 secs, maybe ssl connection was dropped by GFW
-                            count = 5
-                        else:
-                            local.send(data)
-                            count = DIRECT_KEEPLIVE // DIRECT_TICK
-            if count == 0:
-                break
-
-    def _connect_forward(self):
+    def do_CONNECT_Forward(self):
         # for ssl proxy
         host, _, port = self.path.rpartition(':')
         keyFile, crtFile = RootCA.getCertificate(host)
@@ -648,10 +663,10 @@ class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         if path.startswith('/'):
             path = 'https://%s%s' % (host if port=='443' else self.path, path)
         # connect to local proxy server
-        GLOBALip = {'0.0.0.0':'127.0.0.1','::':'::1'}.get(common.GAE_IP, common.GAE_IP)
-        GLOBALport = common.GAE_PORT
+        localhost = {'0.0.0.0':'127.0.0.1','::':'::1'}.get(common.GAE_IP, common.GAE_IP)
+        localport = common.GAE_PORT
         sock = socket.socket(LocalProxyServer.address_family, socket.SOCK_STREAM)
-        sock.connect((GLOBALip, GLOBALport))
+        sock.connect((localhost, localport))
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 32*1024)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 32*1024)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -698,62 +713,60 @@ class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         ssl_sock.close()
         self.connection.close()
 
-class LocalProxyHandler(SimpleProxyHandler, GaeProxyHandler):
-
-    def address_string(self):
-        return '%s:%s' % self.client_address[:2]
-
-    def send_response(self, code, message=None):
-        self.log_request(code)
-        if message is None:
-            if code in self.responses:
-                message = self.responses[code][0]
-            else:
-                message = 'GoAgent Notify'
-        if self.request_version != 'HTTP/0.9':
-            self.wfile.write('%s %d %s\r\n' % (self.protocol_version, code, message))
-
-    def end_error(self, code, message=None, data=None):
-        if not data:
-            self.send_error(code, message)
+    def do_METHOD(self):
+        netloc = urlparse.urlsplit(self.path, 'http')[1]
+        host, port = self.resolve_netloc(netloc)
+        hostslist = common.resolve_host(host)
+        if hostslist is None:
+            return self.do_METHOD_Forward()
         else:
-            self.send_response(code, message)
-            self.wfile.write(data)
+            return self.do_METHOD_Direct()
+
+    def do_METHOD_Direct(self):
+        return SimpleProxyHandler.do_METHOD(self)
+
+    def do_METHOD_Forward(self):
+        if self.path.startswith('/'):
+            host = self.headers['host']
+            if host.endswith(':80'):
+                host = host[:-3]
+            self.path = 'http://%s%s' % (host , self.path)
+
+        payload_len = int(self.headers.get('content-length', 0))
+        if payload_len > 0:
+            payload = self.rfile.read(payload_len)
+        else:
+            payload = ''
+
+        for k in self.__class__.FR_Headers:
+            try:
+                del self.headers[k]
+            except KeyError:
+                pass
+
+        retval, data = self._fetch(self.path, self.command, self.headers, payload)
+        try:
+            if retval == -1:
+                return self.end_error(502, str(data))
+            if data['code']==206 and self.command=='GET':
+                m = re.search(r'bytes\s+(\d+)-(\d+)/(\d+)', data['headers'].get('content-range',''))
+                if m and self._RangeFetch(m, data):
+                    return
+            self.send_response(data['code'])
+            for k,v in data['headers'].iteritems():
+                self.send_header(k.title(), v)
+            self.end_headers()
+            self.wfile.write(data['content'])
+        except socket.error, (err, _):
+            # Connection closed before proxy return
+            if err == errno.EPIPE or err == 10053:
+                return
         self.connection.close()
 
-    def finish(self):
-        try:
-            self.wfile.close()
-            self.rfile.close()
-        except socket.error, (err, _):
-            # Connection closed by browser
-            if err == 10053 or err == errno.EPIPE:
-                self.log_message('socket.error: [%s] "Software caused connection abort"', err)
-            else:
-                raise
-
-    do_CONNECT = SimpleProxyHandler.do_CONNECT
-    def do_GET(self):
-        netloc = urlparse.urlparse(self.path, 'http').netloc
-        if netloc.find(':') > netloc.find(']'):
-            host, _, port = netloc.rpartition(':')
-        else:
-            host = netloc
-        hostslist = common.resolve_host(host)
-        if hostslist:
-            return SimpleProxyHandler.do_GET(self)
-        else:
-            return GaeProxyHandler.do_GET(self)
-    def do_POST(self):
-        netloc = urlparse.urlparse(self.path, 'http').netloc
-        host, _, port = netloc.rpartition(':')
-        hostslist = common.resolve_host(host)
-        if hostslist:
-            return SimpleProxyHandler.do_POST(self)
-        else:
-            return GaeProxyHandler.do_POST(self)
-    do_PUT     = GaeProxyHandler.do_PUT
-    do_DELETE  = GaeProxyHandler.do_DELETE
+    do_GET = do_METHOD
+    do_POST = do_METHOD
+    do_PUT = do_METHOD
+    do_DELETE = do_METHOD
 
 class LocalProxyServer(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
     daemon_threads = True
@@ -766,5 +779,5 @@ if __name__ == '__main__':
     if os.name == 'nt' and not common.GAE_VISIBLE:
         ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
     SocketServer.TCPServer.address_family = {True:socket.AF_INET6, False:socket.AF_INET}[':' in common.GAE_IP]
-    httpd = LocalProxyServer((common.GAE_IP, common.GAE_PORT), LocalProxyHandler)
+    httpd = LocalProxyServer((common.GAE_IP, common.GAE_PORT), GaeProxyHandler)
     httpd.serve_forever()
