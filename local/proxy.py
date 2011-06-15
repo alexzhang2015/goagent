@@ -226,6 +226,7 @@ def socket_forward(local, remote, timeout=60, tick=2, maxping=None, maxpong=None
                 break
     except Exception, ex:
         logging.warning('socket_forward error=%s', ex)
+        raise
 
 class RootCA(object):
     '''RootCA module, based on WallProxy 0.4.0'''
