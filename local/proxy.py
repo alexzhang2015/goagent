@@ -546,7 +546,7 @@ class GaeProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         return True
 
     def resolve_netloc(self, netloc, defaultport=80):
-        if netloc.find(':') > netloc.find(']'):
+        if netloc.rfind(':') > netloc.rfind(']'):
             host, _, port = netloc.rpartition(':')
             port = int(port)
         else:
