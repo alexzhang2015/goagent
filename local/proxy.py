@@ -679,6 +679,11 @@ class GaeProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
     def do_METHOD_Direct(self):
         scheme, netloc, path, params, query, fragment = urlparse.urlparse(self.path, 'http')
         host, port = self.resolve_netloc(netloc)
+        if host == 'encrypted.google.com.hk' and scheme == 'http':
+            self.send_response(301)
+            self.send_header("Location", 'http://www.google.com/ncr')
+            self.end_headers()
+            return
         if host.endswith('.google.com') and scheme == 'http':
             self.send_response(301)
             self.send_header("Location", self.path.replace('http://', 'https://'))
