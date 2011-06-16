@@ -62,6 +62,7 @@ class Common(object):
         self.GAE_PORT      = self.config.getint('gae', 'port')
         self.GAE_VISIBLE   = self.config.getint('gae', 'visible')
         self.GAE_DEBUG     = self.config.get('gae', 'debug')
+        self.GAE_GOOGLESSL = self.config.get('gae', 'googlessl')
         self.GAE_PATH      = self.config.get('gae', 'path')
         self.GAE_PROXY     = self.config.get('gae', 'proxy') if self.config.has_option('gae', 'proxy') else ''
         self.GAE_BINDHOSTS = dict((host, self.GAE_APPIDS[0]) for host in self.config.get('gae', 'bindhosts').split('|')) if self.config.has_option('gae', 'bindhosts') else {}
@@ -679,16 +680,12 @@ class GaeProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
     def do_METHOD_Direct(self):
         scheme, netloc, path, params, query, fragment = urlparse.urlparse(self.path, 'http')
         host, port = self.resolve_netloc(netloc)
-        if host == 'encrypted.google.com.hk' and scheme == 'http':
-            self.send_response(301)
-            self.send_header("Location", 'http://www.google.com/ncr')
-            self.end_headers()
-            return
-        if host.endswith('.google.com') and scheme == 'http':
-            self.send_response(301)
-            self.send_header("Location", self.path.replace('http://', 'https://'))
-            self.end_headers()
-            return
+        if common.GAE_GOOGLESSL:
+            if host.endswith('.google.com') and scheme == 'http':
+                self.send_response(301)
+                self.send_header("Location", self.path.replace('http://', 'https://'))
+                self.end_headers()
+                return
         try:
             soc = socket.create_connection((host, port))
             data = '%s %s %s\r\n'  % (self.command, urlparse.urlunparse(('', '', path, params, query, '')), self.request_version)
