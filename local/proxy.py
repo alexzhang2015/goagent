@@ -62,7 +62,7 @@ class Common(object):
         self.GAE_PORT      = self.config.getint('gae', 'port')
         self.GAE_VISIBLE   = self.config.getint('gae', 'visible')
         self.GAE_DEBUG     = self.config.get('gae', 'debug')
-        self.GAE_GOOGLESSL = self.config.get('gae', 'googlessl')
+        self.GAE_GOOGLESSL = self.config.getint('gae', 'googlessl')
         self.GAE_PATH      = self.config.get('gae', 'path')
         self.GAE_PROXY     = self.config.get('gae', 'proxy') if self.config.has_option('gae', 'proxy') else ''
         self.GAE_BINDHOSTS = dict((host, self.GAE_APPIDS[0]) for host in self.config.get('gae', 'bindhosts').split('|')) if self.config.has_option('gae', 'bindhosts') else {}
