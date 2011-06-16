@@ -591,7 +591,7 @@ class GaeProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
         try:
-            ssl_sock = ssl.wrap_socket(self.connection, keyFile, crtFile, True)
+            ssl_sock = ssl.SSLSocket(self.connection, keyFile, crtFile, True)
         except ssl.SSLError, e:
             logging.exception('SSLError: %s', e)
             return
