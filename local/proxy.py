@@ -677,14 +677,14 @@ class GaeProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             return self.do_METHOD_Direct()
 
     def do_METHOD_Direct(self):
+        scheme, netloc, path, params, query, fragment = urlparse.urlparse(self.path, 'http')
+        host, port = self.resolve_netloc(netloc)
+        if host.endswith('.google.com') and scheme == 'http':
+            self.send_response(301)
+            self.send_header("Location", self.path.replace('http://', 'https://'))
+            self.end_headers()
+            return
         try:
-            scheme, netloc, path, params, query, fragment = urlparse.urlparse(self.path, 'http')
-            host, port = self.resolve_netloc(netloc)
-            if host.endswith('.google.com') and scheme == 'http':
-                self.send_response(301)
-                self.send_header("Location", self.path.replace('http://', 'https://'))
-                self.end_headers()
-                return
             soc = socket.create_connection((host, port))
             data = '%s %s %s\r\n'  % (self.command, urlparse.urlunparse(('', '', path, params, query, '')), self.request_version)
             data += ''.join('%s: %s\r\n' % (k, self.headers[k]) for k in self.headers if not k.lower().startswith('proxy-'))
